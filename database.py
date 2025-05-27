@@ -1,33 +1,31 @@
-from pymongo import MongoClient, errors
-from pymongo.collection import Collection
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
+from beanie import init_beanie, PydanticObjectId as ObjectId
+from pymongo.errors import ServerSelectionTimeoutError
+from models.student_model import Student
 
-
-# MongoDB configuration
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "mydatabase"
 
-# Global variables
-client = None
-db = None
-students_collection: Collection = None
-facial_data_collection: Collection = None
-exeats_collection: Collection = None
-sign_outs_collection: Collection = None
+async def init_db():
+    try:
+        client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        # Test connection
+        await client.server_info()
+        
+        db = client[DB_NAME]
+        await init_beanie(database=db, document_models=[Student])
+        grid_fs_bucket = AsyncIOMotorGridFSBucket(db, bucket_name="profile_images")
 
-try:
-    # Establish connection to MongoDB
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    client.server_info()  # Forces a call to check connection
-    
-    db = client[DB_NAME]
-    print("✅ Successfully connected to MongoDB.")
+        print("✅ Database initialized successfully")
+        # return client, db, grid_fs_bucket
+        return grid_fs_bucket
 
-    # Initialize collections
-    students_collection = db["students"]
-    facial_data_collection = db["facialData"]
-    exeats_collection = db["exeats"]
-    sign_outs_collection = db["signOuts"]
+    except ServerSelectionTimeoutError as err:
+        print(f"❌ Failed to connect to MongoDB: {err}")
+        return None, None
 
-except errors.ServerSelectionTimeoutError as err:
-    print("❌ Failed to connect to MongoDB:", err)
-    db = None
+async def save_image_to_gridfs(image_bytes: bytes, filename: str) -> ObjectId:
+    if grid_fs_bucket is None:
+        raise Exception("GridFSBucket not initialized. Call init_db() first.")
+    file_id = await grid_fs_bucket.upload_from_stream(filename, image_bytes)
+    return file_id

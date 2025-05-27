@@ -1,9 +1,14 @@
 from models.student_model import Student
-from database import students_collection
+from bson import ObjectId
 
 async def create_student_service(student: Student):
-    existing = await students_collection.find_one({"matriculation_number": student.matriculation_number})
+    existing = await Student.find_one(Student.matriculation_number == student.matriculation_number)
     if existing:
         return {"message": "Student already exists"}
-    await students_collection.insert_one(student.dict())
+    
+    await student.create()
     return {"message": "Student created"}
+
+async def get_all_students_service():
+    students = await Student.find_all().to_list()
+    return students
