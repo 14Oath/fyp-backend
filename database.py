@@ -22,10 +22,10 @@ async def init_db():
 
     except ServerSelectionTimeoutError as err:
         print(f"❌ Failed to connect to MongoDB: {err}")
-        return None, None
+        return None
 
-async def save_image_to_gridfs(image_bytes: bytes, filename: str) -> ObjectId:
-    if grid_fs_bucket is None:
-        raise Exception("GridFSBucket not initialized. Call init_db() first.")
-    file_id = await grid_fs_bucket.upload_from_stream(filename, image_bytes)
-    return file_id
+# async def save_image_to_gridfs(image_bytes: bytes, filename: str) -> ObjectId:
+#     if grid_fs_bucket is None:
+#         raise Exception("GridFSBucket not initialized. Call init_db() first.")
+#     file_id = await grid_fs_bucket.upload_from_stream(filename, image_bytes)
+#     return file_id

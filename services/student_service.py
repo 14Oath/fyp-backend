@@ -8,7 +8,7 @@ async def create_student_service(student: Student):
     
     await student.create()
     return {"message": "Student created"}
-
 async def get_all_students_service():
     students = await Student.find_all().to_list()
     return students
+
