@@ -1,44 +1,41 @@
-from typing import Union, Literal
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from pydantic import EmailStr
-from beanie import PydanticObjectId as ObjectId
-from models.student_model import Student
-from services.student_service import get_all_students_service
-from database import init_db
 from contextlib import asynccontextmanager
+from pydantic import EmailStr
+from typing import Literal
+import numpy as np
+import cv2
 
+from models.student_model import Student
+from face_embedding import get_embedding_from_image
+from face_recognition import FaceRegistrar, FaceVerifier
+import face_embeddings
+from database import init_db
 
+# App setup and lifespan context
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic here
     print("🚀 App is starting up")
-
     grid_fs_bucket = await init_db()
     if not grid_fs_bucket:
         raise RuntimeError("❌ Failed to initialize GridFS bucket.")
     app.state.grid_fs_bucket = grid_fs_bucket
-
     yield
-
-    # Shutdown logic here
     print("🛑 App is shutting down")
-
 
 app = FastAPI(lifespan=lifespan)
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # Add your frontend URLs
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ---------- 📌 ROUTES ---------- #
 
-@app.post("/students/create")
+@app.post("/students/create", tags=["Students"])
 async def create_student(
     request: Request,
     full_name: str = Form(...),
@@ -46,7 +43,7 @@ async def create_student(
     program: str = Form(...),
     matriculation_number: str = Form(...),
     registration_number: str = Form(...),
-    room_number: str = Form(...),
+    room_details: str = Form(...),
     gender: Literal["male", "female"] = Form(...),
     hall_of_residence: str = Form(...),
     level: Literal["100", "200", "300", "400", "500"] = Form(...),
@@ -55,20 +52,32 @@ async def create_student(
     try:
         grid_fs_bucket = request.app.state.grid_fs_bucket
 
-        # Check if student exists already
         existing = await Student.find_one(Student.matriculation_number == matriculation_number)
         if existing:
             raise HTTPException(status_code=400, detail="Student already exists")
 
-        # Read image bytes
         image_bytes = await profile_image.read()
-
-        # Save image to GridFS
         gridfs_file_id = await grid_fs_bucket.upload_from_stream(profile_image.filename, image_bytes)
-
         print(f"Image saved with ID: {gridfs_file_id}")
 
-        # Create new Student with GridFS file id
+        np_arr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        embedding = face_embeddings.get_embedding_from_image(img)
+        if embedding is None:
+            raise HTTPException(status_code=400, detail="Failed to extract face embedding from image")
+
+        registrar = FaceRegistrar()
+        success = registrar.register_face(
+            person_id=matriculation_number,
+            embedding=embedding,
+            image_path=profile_image.filename
+        )
+        registrar.close()
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save face embedding")
+
         student = Student(
             full_name=full_name,
             email=email,
@@ -85,7 +94,7 @@ async def create_student(
         await student.create()
 
         return {"message": "Student created successfully", "student_id": str(student.id)}
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -93,97 +102,50 @@ async def create_student(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.get("/students")
-async def get_all_students():
-    try:
-        response = await get_all_students_service()
-        return {"status": "success", "data": response}
-    except Exception as e:
-        print(f"Error getting students: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.get("/students/{matric_number}")
-async def get_student_info(matric_number: str):
-    """Get student details without profile image (faster)"""
-    try:
-        student = await Student.find_one(Student.matriculation_number == matric_number)
-        
-        if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
-        
-        return {
-            "status": "success",
-            "data": {
-                "id": str(student.id),
-                "full_name": student.full_name,
-                "email": student.email,
-                "program": student.program,
-                "matriculation_number": student.matriculation_number,
-                "registration_number": student.registration_number,
-                "room_number": student.room_number,
-                "gender": student.gender,
-                "hall_of_residence": student.hall_of_residence,
-                "level": student.level,
-                "has_profile_image": bool(student.profile_image),
-                "profile_image_url": f"/students/{matric_number}/image" if student.profile_image else None
-            }
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error getting student info: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.get("/students/{matric_number}/image")
-async def get_student_image(matric_number: str, request: Request):
-    """Get student profile image as file"""
+@app.post("/students/verify", tags=["Students"])
+async def verify_student_face(
+    request: Request,
+    profile_image: UploadFile = File(...),
+    threshold: float = 0.7
+):
     try:
         grid_fs_bucket = request.app.state.grid_fs_bucket
 
-        student = await Student.find_one(Student.matriculation_number == matric_number)
-        
+        image_bytes = await profile_image.read()
+        np_arr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image file")
+
+        embedding = face_embeddings.get_embedding_from_image(img)
+        if embedding is None:
+            raise HTTPException(status_code=400, detail="Failed to extract face embedding")
+
+        verifier = FaceVerifier()
+        matched_id = verifier.verify_face(embedding, threshold=threshold)
+        verifier.close()
+
+        if not matched_id:
+            return {"message": "No matching student found"}
+
+        student = await Student.find_one(Student.matriculation_number == matched_id)
         if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
-        
-        if not student.profile_image:
-            raise HTTPException(status_code=404, detail="No profile image found for this student")
-        
-        image_id = ObjectId(student.profile_image) if isinstance(student.profile_image, str) else student.profile_image
-        
-        # Download file from GridFS
-        grid_out = await grid_fs_bucket.open_download_stream(image_id)
-        image_data = await grid_out.read()
-        
-        # Determine content type
-        content_type = "image/jpeg"  # default
-        file_info = await grid_fs_bucket.find({"_id": image_id}).to_list(1)
-        if file_info and "metadata" in file_info[0]:
-            content_type = file_info[0]["metadata"].get("content_type", content_type)
-        elif file_info:
-            filename = file_info[0].get("filename", "")
-            if filename.lower().endswith('.png'):
-                content_type = "image/png"
-            elif filename.lower().endswith('.gif'):
-                content_type = "image/gif"
-        
-        return Response(
-            content=image_data, 
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"inline; filename={student.matriculation_number}_profile.jpg"
+            raise HTTPException(status_code=404, detail="Matched student not found in database")
+
+        return {
+            "message": "Student verified successfully",
+            "student": {
+                "full_name": student.full_name,
+                "program": student.program,
+                "hall_of_residence": student.hall_of_residence,
+                "matriculation_number": student.matriculation_number,
+                "level": student.level,
+                "room_Details": student.room_Details
             }
-        )
-    
+        }
+
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error getting student image: {str(e)}")
+        print(f"Error during verification: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
