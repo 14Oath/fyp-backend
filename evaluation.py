@@ -1,6 +1,6 @@
 import os
 import cv2
-from face_embeddings import get_embedding_from_image
+from face_embedding import get_embedding_from_image
 from face_recognition import FaceVerifier
 
 # Path to your dataset

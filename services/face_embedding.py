@@ -1,10 +1,9 @@
-# face_utils.py
-
 import torch
 import numpy as np
 import cv2
 from PIL import Image
 from mtcnn import MTCNN
+from face_embedding import get_embedding_from_image
 from inception_resnet_v1 import InceptionResnetV1
 
 # Device configuration
@@ -12,7 +11,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load face detection and recognition models
 mtcnn = MTCNN(device=device)
-facenet = InceptionResnetV1(pretrained=None, classify=False).eval().to(device)
+facenet = InceptionResnetV1(pretrained='vggFace2', classify=False).eval().to(device)
 
 # Extract embedding from image file path
 def get_embedding(image_path: str):

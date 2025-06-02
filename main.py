@@ -84,7 +84,7 @@ async def create_student(
             program=program,
             matriculation_number=matriculation_number,
             registration_number=registration_number,
-            room_number=room_number,
+            room_details=room_details,
             gender=gender,
             hall_of_residence=hall_of_residence,
             level=level,
@@ -140,7 +140,7 @@ async def verify_student_face(
                 "hall_of_residence": student.hall_of_residence,
                 "matriculation_number": student.matriculation_number,
                 "level": student.level,
-                "room_Details": student.room_Details
+                "room_details": student.room_details
             }
         }
 

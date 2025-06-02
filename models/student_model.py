@@ -1,3 +1,4 @@
+
 from beanie import Document, PydanticObjectId as ObjectId, Indexed
 from typing import Optional
 from pydantic import EmailStr, Field
